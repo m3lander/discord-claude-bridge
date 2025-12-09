@@ -1,0 +1,10 @@
+{
+  "mappings": [
+    {
+      "channelId": "REPLACE_WITH_HOME_CHANNEL_ID",
+      "directory": "/Users/maxmelander",
+      "description": "Home directory for general tasks"
+    }
+  ],
+  "defaultDirectory": "/Users/maxmelander"
+}

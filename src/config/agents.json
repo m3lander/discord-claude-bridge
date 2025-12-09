@@ -1,0 +1,26 @@
+{
+  "aliases": {
+    "claude": {
+      "model": "claude-sonnet-4-20250514",
+      "systemPrompt": null,
+      "description": "Default Claude Code agent"
+    },
+    "opus": {
+      "model": "claude-opus-4-20250514",
+      "systemPrompt": null,
+      "description": "Opus model for complex architectural tasks"
+    },
+    "review": {
+      "model": "claude-sonnet-4-20250514",
+      "systemPrompt": "You are a thorough code reviewer. Focus on identifying bugs, security vulnerabilities, performance issues, and adherence to best practices. Be specific and actionable in your feedback.",
+      "description": "Code review specialist"
+    },
+    "haiku": {
+      "model": "claude-haiku-3-5-20241022",
+      "systemPrompt": null,
+      "description": "Fast Haiku model for quick tasks"
+    }
+  },
+  "defaultAlias": "claude",
+  "triggerPrefix": "@"
+}

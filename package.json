@@ -1,0 +1,37 @@
+{
+  "name": "discord-claude-bridge",
+  "version": "0.1.0",
+  "description": "Bridge Discord to Claude Code via the Agent SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "discord",
+    "claude",
+    "anthropic",
+    "agent-sdk",
+    "bot"
+  ],
+  "author": "Max Melander",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.6",
+    "better-sqlite3": "^11.6.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
