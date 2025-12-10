@@ -106,10 +106,13 @@ function truncateCode(code: string): string {
 
   // Truncate individual lines
   const truncatedLines = lines.map(line => {
-    if (line.length > MAX_LINE_LENGTH) {
-      return line.slice(0, MAX_LINE_LENGTH - 3) + '...';
+    // Escape triple backticks to prevent breaking out of code block
+    const safeLine = line.replace(/```/g, '`\u200b``');
+
+    if (safeLine.length > MAX_LINE_LENGTH) {
+      return safeLine.slice(0, MAX_LINE_LENGTH - 3) + '...';
     }
-    return line;
+    return safeLine;
   });
 
   // Limit total lines
@@ -133,11 +136,19 @@ function truncateCode(code: string): string {
  * Format inline code (single backticks)
  */
 export function formatInlineCode(code: string, maxLength: number = 50): string {
-  const clean = code.replace(/`/g, "'"); // Escape backticks
-  if (clean.length > maxLength) {
-    return `\`${clean.slice(0, maxLength - 3)}...\``;
+  // Handle backticks by using double backticks or spaces if needed
+  if (code.includes('`')) {
+    // If it contains backticks, wrap in double backticks (Discord markdown support)
+    // Also handle edge case where it starts or ends with backtick by adding spaces
+    const content = code.includes('`') ? ` ${code} ` : code;
+    const truncated = content.length > maxLength ? content.slice(0, maxLength - 3) + '...' : content;
+    return `\`\`${truncated}\`\``;
   }
-  return `\`${clean}\``;
+
+  if (code.length > maxLength) {
+    return `\`${code.slice(0, maxLength - 3)}...\``;
+  }
+  return `\`${code}\``;
 }
 
 /**

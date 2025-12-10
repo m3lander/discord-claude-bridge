@@ -48,7 +48,7 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
       return `✏️ ${formatPath(input.file_path as string)}`;
 
     case 'Bash':
-      const cmd = truncate(input.command as string, 100);
+      const cmd = truncate(input.command as string, 100).replace(/```/g, '`\u200b``');
       return `\`\`\`bash\n${cmd}\n\`\`\``;
 
     case 'Glob':
@@ -69,7 +69,11 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
     default:
       // Generic formatting for unknown tools
       const keys = Object.keys(input).slice(0, 3);
-      const summary = keys.map(k => `${k}: ${truncate(String(input[k]), 30)}`).join(', ');
+      const summary = keys.map(k => {
+        const val = input[k];
+        const valStr = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val);
+        return `${k}: ${truncate(valStr, 30)}`;
+      }).join(', ');
       return summary ? `\`${summary}\`` : '';
   }
 }
@@ -84,7 +88,8 @@ function formatToolOutput(toolName: string, output: unknown): string {
 
   // For Bash, show output in code block
   if (toolName === 'Bash') {
-    return `\`\`\`\n${truncate(str, MAX_TOOL_OUTPUT_LENGTH)}\n\`\`\``;
+    const bashOutput = truncate(str, MAX_TOOL_OUTPUT_LENGTH).replace(/```/g, '`\u200b``');
+    return `\`\`\`\n${bashOutput}\n\`\`\``;
   }
 
   // For Read, don't show content (it would be too long)
@@ -95,7 +100,9 @@ function formatToolOutput(toolName: string, output: unknown): string {
   // For most tools, just truncate
   const truncated = truncate(str, MAX_TOOL_OUTPUT_LENGTH);
   if (truncated.length > 100) {
-    return `\`\`\`\n${truncated}\n\`\`\``;
+    // Escape triple backticks in output
+    const safeTruncated = truncated.replace(/```/g, '`\u200b``');
+    return `\`\`\`\n${safeTruncated}\n\`\`\``;
   }
 
   return truncated ? `→ ${truncated}` : '';

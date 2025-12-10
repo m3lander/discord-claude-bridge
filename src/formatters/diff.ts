@@ -84,8 +84,10 @@ function generateSimpleDiff(oldStr: string, newStr: string): string {
  * Truncate a line for display
  */
 function truncateLine(line: string): string {
-  if (line.length <= MAX_LINE_LENGTH) return line;
-  return line.slice(0, MAX_LINE_LENGTH - 3) + '...';
+  // Escape triple backticks
+  const safeLine = line.replace(/```/g, '`\u200b``');
+  if (safeLine.length <= MAX_LINE_LENGTH) return safeLine;
+  return safeLine.slice(0, MAX_LINE_LENGTH - 3) + '...';
 }
 
 /**
