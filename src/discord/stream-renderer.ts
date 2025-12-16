@@ -287,14 +287,22 @@ export class StreamRenderer {
       this.flushTimeout = null;
     }
 
-    const content = this.buildMessageContent();
+    // If complete, get full content to check length for splitting
+    const content = this.buildMessageContent(!this.isComplete);
 
     // During streaming, use single message with truncation
     // On completion, split into multiple messages if needed
     if (this.isComplete && content.length > this.maxMessageLength) {
       await this.sendMultipleMessages(content);
     } else {
-      const truncatedContent = this.ensureMaxLength(content);
+      // If we are here, either it's streaming (and already truncated) or complete but fits in one message
+      // However, if streaming, the content is already truncated by buildMessageContent(true) above
+      // If complete and fits, it's also ready.
+      // BUT if we are effectively re-truncating for safety (ensureMaxLength), we should pass full content?
+      // No, let's keep it simple.
+
+      const contentToUse = this.isComplete ? content : this.buildMessageContent(true);
+      const truncatedContent = this.ensureMaxLength(contentToUse);
       if (!this.discordMessage) {
         this.discordMessage = await this.channel.send(truncatedContent);
       } else {
@@ -395,14 +403,54 @@ export class StreamRenderer {
   /**
    * Build the full message content for Discord
    */
-  private buildMessageContent(): string {
+  private buildMessageContent(allowTruncation: boolean = true): string {
     const parts: string[] = [];
 
-    // Tool calls section
+    // 1. Prepare component strings first to calculate lengths
+    let toolSection = '';
     if (this.showToolCalls && this.toolCalls.length > 0) {
-      const toolSection = this.buildToolSection();
-      if (toolSection) parts.push(toolSection);
+      toolSection = this.buildToolSection();
     }
+
+    let footerParts: string[] = [];
+
+    // Status indicator
+    if (!this.isComplete) {
+      const runningTool = this.toolCalls.find(t => t.status === 'running');
+      if (runningTool) {
+        footerParts.push(`\n⏳ *Running ${runningTool.name}...*`);
+      }
+    }
+
+    // Error message
+    if (this.hasError) {
+      // Allocate 200 chars for error
+      footerParts.push(`\n❌ **Error:** ${this.truncateText(this.errorMessage, 200)}`);
+    }
+
+    // Completion indicator
+    if (this.isComplete && !this.hasError) {
+      footerParts.push('\n✅ *Complete*');
+    }
+
+    // 2. Calculate available space for text
+    // Start with max length
+    // Subtract tool section length
+    // Subtract footer length
+    // Subtract separators (approximate 4 chars per section \n\n)
+    let usedLength = 0;
+    if (toolSection) usedLength += toolSection.length + 2; // +2 for newline
+    for (const part of footerParts) usedLength += part.length + 2;
+
+    // Reserve space for separator if needed
+    if (toolSection && this.currentText) usedLength += 24; // '───────────────────────' + newlines
+
+    const availableForText = Math.max(100, this.maxMessageLength - usedLength - 50); // Keep at least 100 chars, 50 chars safety margin
+
+    // 3. Assemble components
+
+    // Tools
+    if (toolSection) parts.push(toolSection);
 
     // Separator
     if (parts.length > 0 && this.currentText) {
@@ -411,33 +459,20 @@ export class StreamRenderer {
 
     // Current text
     if (this.currentText) {
-      parts.push(this.truncateText(this.currentText));
+      // Conditionally truncate
+      if (allowTruncation) {
+        parts.push(this.truncateText(this.currentText, availableForText));
+      } else {
+        parts.push(this.currentText);
+      }
     } else if (!this.isComplete && this.toolCalls.length === 0) {
       parts.push('🤔 *Thinking...*');
     }
 
-    // Status indicator
-    if (!this.isComplete) {
-      const runningTool = this.toolCalls.find(t => t.status === 'running');
-      if (runningTool) {
-        parts.push(`\n⏳ *Running ${runningTool.name}...*`);
-      }
-    }
-
-    // Error message
-    if (this.hasError) {
-      parts.push(`\n❌ **Error:** ${this.truncateText(this.errorMessage, 200)}`);
-    }
-
-    // Completion indicator
-    if (this.isComplete && !this.hasError) {
-      parts.push('\n✅ *Complete*');
-    }
+    // Footer items
+    parts.push(...footerParts);
 
     const content = parts.join('\n\n');
-
-    // Length handling is done in flushNow() - either truncating for streaming
-    // or splitting into multiple messages when complete
 
     return content || '🤔 *Processing...*';
   }
@@ -450,7 +485,7 @@ export class StreamRenderer {
 
     for (const tool of this.toolCalls) {
       const emoji = tool.status === 'running' ? '⏳' :
-                    tool.status === 'error' ? '❌' : '✅';
+        tool.status === 'error' ? '❌' : '✅';
 
       // Format based on tool type
       if (tool.name === 'Edit' && tool.status === 'complete') {
@@ -480,9 +515,11 @@ export class StreamRenderer {
   /**
    * Truncate text to fit Discord limits
    */
-  private truncateText(text: string, maxLength: number = this.maxMessageLength / 2): string {
+  private truncateText(text: string, maxLength: number): string {
     if (text.length <= maxLength) return text;
-    return text.slice(0, maxLength - 20) + '\n\n... *[truncated]*';
+    // Ensure we don't return negative slice
+    const sliceLen = Math.max(0, maxLength - 40);
+    return text.slice(0, sliceLen) + '\n\n... *[truncated]*';
   }
 
   /**

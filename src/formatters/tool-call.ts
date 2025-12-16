@@ -135,7 +135,8 @@ function formatPath(filePath: string | undefined): string {
 /**
  * Truncate a string with ellipsis
  */
-function truncate(str: string, maxLength: number): string {
+function truncate(str: string | undefined | null, maxLength: number): string {
+  if (!str) return '';
   if (str.length <= maxLength) return str;
   return str.slice(0, maxLength - 3) + '...';
 }
