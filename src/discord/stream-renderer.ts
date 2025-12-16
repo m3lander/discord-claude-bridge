@@ -18,8 +18,9 @@ import { formatCodeBlock } from '../formatters/code-block.js';
 
 // Configuration
 const DEBOUNCE_MS = 1500; // Flush buffer every 1.5 seconds
-const MAX_MESSAGE_LENGTH = 1900; // Discord limit is 2000, leave margin
+const MAX_MESSAGE_LENGTH = 1950; // Discord limit is 2000, leave margin
 const MAX_TOOL_HISTORY = 5; // Keep last N tool calls visible
+const TRUNCATION_MESSAGE = '\n\n... *[Message truncated - content too long for Discord]*';
 
 export interface StreamRendererOptions {
   debounceMs?: number;
@@ -69,6 +70,12 @@ export class StreamRenderer {
 
   /**
    * Process a stream of SDK messages and render to Discord
+   *
+   * Session ID Extraction Strategy:
+   * The claude-agent-sdk includes `session_id` on every SDKMessage type.
+   * We capture it from the first message we receive (typically system.init),
+   * but fall back to extracting from any message type for robustness.
+   * This reduces coupling to any specific event structure.
    */
   async render(messageStream: AsyncIterable<SDKMessage>): Promise<string | null> {
     let sessionId: string | null = null;
@@ -77,14 +84,35 @@ export class StreamRenderer {
       // Send initial "thinking" message
       this.discordMessage = await this.channel.send('🤔 *Thinking...*');
 
+      let messageCount = 0;
       for await (const message of messageStream) {
-        // Capture session ID
-        if (message.type === 'system' && message.subtype === 'init') {
-          sessionId = message.session_id;
+        messageCount++;
+
+        // Extract session_id from any message (all SDKMessage types include it)
+        // Prefer init message but fall back to any message with session_id
+        const messageSessionId = (message as any).session_id;
+        if (!sessionId && messageSessionId) {
+          sessionId = messageSessionId;
+          const source = message.type === 'system' && (message as any).subtype === 'init'
+            ? 'init'
+            : message.type;
+          console.log(`[StreamRenderer] Captured session_id from ${source}: ${sessionId}`);
+        }
+
+        // Log message types for debugging (only first few and important ones)
+        if (messageCount <= 5 || message.type === 'system' || message.type === 'result') {
+          console.log(`[StreamRenderer] Message #${messageCount}: type=${message.type}${(message as any).subtype ? `, subtype=${(message as any).subtype}` : ''}`);
         }
 
         // Process the message
         await this.processMessage(message);
+      }
+
+      // Warn loudly if no session_id was captured - this indicates SDK changes
+      if (!sessionId) {
+        console.error(`[StreamRenderer] WARNING: No session_id captured after ${messageCount} messages. This may indicate SDK structure changes.`);
+      } else {
+        console.log(`[StreamRenderer] Stream complete. Total messages: ${messageCount}, sessionId: ${sessionId}`);
       }
 
       // Final flush
@@ -261,21 +289,107 @@ export class StreamRenderer {
 
     const content = this.buildMessageContent();
 
-    if (!this.discordMessage) {
-      this.discordMessage = await this.channel.send(content);
+    // During streaming, use single message with truncation
+    // On completion, split into multiple messages if needed
+    if (this.isComplete && content.length > this.maxMessageLength) {
+      await this.sendMultipleMessages(content);
     } else {
-      try {
-        await this.discordMessage.edit(content);
-      } catch (error) {
-        // Message might be deleted, try to send new one
-        console.error('Failed to edit message:', error);
+      const truncatedContent = this.ensureMaxLength(content);
+      if (!this.discordMessage) {
+        this.discordMessage = await this.channel.send(truncatedContent);
+      } else {
         try {
-          this.discordMessage = await this.channel.send(content);
-        } catch (sendError) {
-          console.error('Failed to send new message:', sendError);
+          await this.discordMessage.edit(truncatedContent);
+        } catch (error) {
+          // Message might be deleted, try to send new one
+          console.error('Failed to edit message:', error);
+          try {
+            this.discordMessage = await this.channel.send(truncatedContent);
+          } catch (sendError) {
+            console.error('Failed to send new message:', sendError);
+          }
         }
       }
     }
+  }
+
+  /**
+   * Send long content across multiple Discord messages
+   */
+  private async sendMultipleMessages(content: string): Promise<void> {
+    const chunks = this.splitContent(content);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const isFirst = i === 0;
+
+      try {
+        if (isFirst && this.discordMessage) {
+          // Update the existing message with the first chunk
+          await this.discordMessage.edit(chunk);
+        } else {
+          // Send additional chunks as new messages
+          await this.channel.send(chunk);
+        }
+      } catch (error) {
+        console.error(`Failed to send message chunk ${i + 1}/${chunks.length}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Split content into chunks that fit Discord's message limit
+   * Tries to split at natural boundaries (newlines, code blocks)
+   */
+  private splitContent(content: string): string[] {
+    const chunks: string[] = [];
+    const maxLen = this.maxMessageLength - 50; // Leave margin
+
+    let remaining = content;
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) {
+        chunks.push(remaining);
+        break;
+      }
+
+      // Try to find a good split point
+      let splitPoint = maxLen;
+
+      // Look for code block boundary (```) within the last 500 chars
+      const codeBlockEnd = remaining.lastIndexOf('\n```', maxLen);
+      if (codeBlockEnd > maxLen - 500 && codeBlockEnd > 100) {
+        // Split after the code block ends
+        const afterCodeBlock = remaining.indexOf('\n', codeBlockEnd + 4);
+        if (afterCodeBlock !== -1 && afterCodeBlock <= maxLen) {
+          splitPoint = afterCodeBlock + 1;
+        }
+      } else {
+        // Look for double newline (paragraph break)
+        const doubleNewline = remaining.lastIndexOf('\n\n', maxLen);
+        if (doubleNewline > maxLen - 300 && doubleNewline > 100) {
+          splitPoint = doubleNewline + 2;
+        } else {
+          // Look for single newline
+          const singleNewline = remaining.lastIndexOf('\n', maxLen);
+          if (singleNewline > maxLen - 200 && singleNewline > 100) {
+            splitPoint = singleNewline + 1;
+          }
+        }
+      }
+
+      chunks.push(remaining.slice(0, splitPoint));
+      remaining = remaining.slice(splitPoint);
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Ensure content doesn't exceed Discord's limit (for streaming)
+   */
+  private ensureMaxLength(content: string): string {
+    if (content.length <= this.maxMessageLength) return content;
+    return content.slice(0, this.maxMessageLength - 50) + '\n\n... *[streaming, more content pending...]*';
   }
 
   /**
@@ -320,12 +434,10 @@ export class StreamRenderer {
       parts.push('\n✅ *Complete*');
     }
 
-    let content = parts.join('\n\n');
+    const content = parts.join('\n\n');
 
-    // Ensure we don't exceed Discord's limit
-    if (content.length > this.maxMessageLength) {
-      content = content.slice(0, this.maxMessageLength - 50) + '\n\n... *[truncated]*';
-    }
+    // Length handling is done in flushNow() - either truncating for streaming
+    // or splitting into multiple messages when complete
 
     return content || '🤔 *Processing...*';
   }

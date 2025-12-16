@@ -115,8 +115,8 @@ export class SessionManager {
    */
   updateSessionActivity(threadId: string, newSessionId?: string): void {
     const updates = newSessionId
-      ? 'session_id = ?, last_active_at = datetime("now"), message_count = message_count + 1'
-      : 'last_active_at = datetime("now"), message_count = message_count + 1';
+      ? "session_id = ?, last_active_at = datetime('now'), message_count = message_count + 1"
+      : "last_active_at = datetime('now'), message_count = message_count + 1";
 
     const params = newSessionId ? [newSessionId, threadId] : [threadId];
 

@@ -34,7 +34,8 @@ export interface MessageHandlerOptions {
 export class MessageHandler {
   private client: Client;
   private options: MessageHandlerOptions;
-  private activeQueries: Set<string> = new Set(); // Prevent duplicate processing
+  private processedMessages: Map<string, number> = new Map(); // messageKey -> timestamp
+  private readonly MESSAGE_DEDUP_WINDOW_MS = 30000; // 30 second window to prevent duplicates
 
   constructor(client: Client, options: MessageHandlerOptions = {}) {
     this.client = client;
@@ -96,16 +97,49 @@ export class MessageHandler {
       }
     }
 
-    // Prevent duplicate processing
-    const messageKey = `${message.channelId}-${message.id}`;
-    if (this.activeQueries.has(messageKey)) return;
-    this.activeQueries.add(messageKey);
+    // Prevent duplicate processing with time-based deduplication
+    //
+    // Why message.id alone is sufficient:
+    // - Discord Snowflake IDs are globally unique across all of Discord
+    // - The same message has one ID regardless of where it's accessed
+    //   (even when a message becomes a thread starter, its ID stays the same)
+    // - Previously we used `${channelId}-${messageId}` but this caused duplicates
+    //   because the same message fires events with different channelIds
+    //
+    // Why 30 second window:
+    // - Handles race conditions during thread creation
+    // - Network issues and retries are handled by Discord.js internally
+    // - User re-sending creates a new message with new ID (not a duplicate)
+    const messageKey = message.id;
+    const now = Date.now();
+
+    // Clean up old entries periodically
+    if (this.processedMessages.size > 100) {
+      for (const [key, timestamp] of this.processedMessages) {
+        if (now - timestamp > this.MESSAGE_DEDUP_WINDOW_MS) {
+          this.processedMessages.delete(key);
+        }
+      }
+    }
+
+    // Check if we've recently processed this message
+    const lastProcessed = this.processedMessages.get(messageKey);
+    if (lastProcessed && now - lastProcessed < this.MESSAGE_DEDUP_WINDOW_MS) {
+      console.log(`[MessageHandler] Skipping duplicate message ${message.id} (processed ${now - lastProcessed}ms ago)`);
+      return;
+    }
+
+    // Mark as processing immediately to prevent race conditions
+    this.processedMessages.set(messageKey, now);
 
     try {
       await this.processMessage(message, parsed, directory, isThread);
-    } finally {
-      this.activeQueries.delete(messageKey);
+    } catch (error) {
+      console.error(`[MessageHandler] Error processing message:`, error);
+      throw error;
     }
+    // Note: We keep the message in processedMessages for the dedup window
+    // to prevent duplicate processing from race conditions
   }
 
   /**
@@ -163,29 +197,55 @@ export class MessageHandler {
     // Create stream renderer
     const renderer = createStreamRenderer(targetChannel);
 
-    // Execute query with streaming
-    const queryGenerator = executeQuery({
-      prompt,
-      cwd: directory,
-      sessionId: isNewSession ? undefined : session.sessionId,
-      agentConfig: parsed.agentConfig,
-    });
+    // Determine session ID to resume
+    // Note: Empty string '' is falsy in JavaScript, so `|| undefined` converts
+    // both '' and null/undefined to undefined, signaling a new session to the SDK.
+    // The SDK's `resume` option expects undefined (or omitted) for new sessions.
+    const resumeSessionId = session.sessionId || undefined;
 
-    // Render the stream to Discord
-    const newSessionId = await renderer.render(queryGenerator);
+    console.log(`[MessageHandler] Processing message in thread ${threadId}`);
+    console.log(`[MessageHandler] isNewSession: ${isNewSession}, resumeSessionId: ${resumeSessionId || '(new session)'}`);
 
-    // Update session with actual session ID
-    if (newSessionId && newSessionId !== session.sessionId) {
-      sessionManager.updateSessionActivity(threadId, newSessionId);
-    } else {
+    try {
+      // Execute query with streaming
+      const queryGenerator = executeQuery({
+        prompt,
+        cwd: directory,
+        sessionId: resumeSessionId,
+        agentConfig: parsed.agentConfig,
+      });
+
+      // Render the stream to Discord
+      const newSessionId = await renderer.render(queryGenerator);
+
+      console.log(`[MessageHandler] Query complete, newSessionId: ${newSessionId || '(none)'}`);
+
+      // Update session with actual session ID
+      if (newSessionId && newSessionId !== session.sessionId) {
+        console.log(`[MessageHandler] Updating session with new ID: ${newSessionId}`);
+        sessionManager.updateSessionActivity(threadId, newSessionId);
+      } else {
+        console.log(`[MessageHandler] Updating session activity (no ID change)`);
+        sessionManager.updateSessionActivity(threadId);
+      }
+    } catch (error) {
+      console.error(`[MessageHandler] Error during query execution:`, error);
+      // Still update activity even on error
       sessionManager.updateSessionActivity(threadId);
+      throw error;
     }
   }
 
   /**
-   * Create a new thread for a conversation
+   * Create a new thread for a conversation, or get existing one if already created
    */
   private async createThread(message: Message, alias: string): Promise<ThreadChannel> {
+    // Check if a thread already exists for this message
+    if (message.thread) {
+      console.log(`[MessageHandler] Thread already exists for message, using existing thread ${message.thread.id}`);
+      return message.thread;
+    }
+
     // Generate thread name from message content
     const maxNameLength = 100;
     let threadName = message.content.slice(0, maxNameLength);
@@ -208,15 +268,28 @@ export class MessageHandler {
       threadName = threadName.slice(0, maxNameLength - 3) + '...';
     }
 
-    // Create the thread
-    const thread = await (message.channel as TextChannel).threads.create({
-      name: threadName,
-      autoArchiveDuration: this.options.threadArchiveDuration,
-      startMessage: message,
-      reason: `Claude Code session started by ${message.author.tag}`,
-    });
+    try {
+      // Create the thread
+      const thread = await (message.channel as TextChannel).threads.create({
+        name: threadName,
+        autoArchiveDuration: this.options.threadArchiveDuration,
+        startMessage: message,
+        reason: `Claude Code session started by ${message.author.tag}`,
+      });
 
-    return thread;
+      return thread;
+    } catch (error: any) {
+      // Handle "thread already exists" error (code 160004)
+      if (error.code === 160004) {
+        console.log(`[MessageHandler] Thread creation race condition, fetching existing thread`);
+        // Fetch the message again to get the thread reference
+        const freshMessage = await message.fetch();
+        if (freshMessage.thread) {
+          return freshMessage.thread;
+        }
+      }
+      throw error;
+    }
   }
 }
 

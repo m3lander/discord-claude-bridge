@@ -125,14 +125,16 @@ export async function executeQuerySync(options: QueryOptions): Promise<QueryResu
 }
 
 /**
- * Extract session ID from a stream of messages
- * Useful when you need the session ID early in the stream
+ * Extract session ID from any SDK message
+ *
+ * Note: All SDKMessage types include `session_id` as a property.
+ * While the `system.init` message is typically the first, this function
+ * extracts from any message type for robustness against SDK changes.
  */
 export function extractSessionId(message: SDKMessage): string | null {
-  if (message.type === 'system' && message.subtype === 'init') {
-    return message.session_id;
-  }
-  return null;
+  // All SDK message types include session_id
+  const sessionId = (message as any).session_id;
+  return sessionId && typeof sessionId === 'string' ? sessionId : null;
 }
 
 /**
