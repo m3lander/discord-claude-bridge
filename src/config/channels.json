@@ -1,9 +1,14 @@
 {
   "mappings": [
     {
-      "channelId": "REPLACE_WITH_HOME_CHANNEL_ID",
+      "channelId": "1450513987107029125",
       "directory": "/Users/maxmelander",
       "description": "Home directory for general tasks"
+    },
+    {
+      "channelId": "1450516250114523317",
+      "directory": "/Users/maxmelander/workbench/discord-claude-bridge",
+      "description": "Discord Claude Bridge project"
     }
   ],
   "defaultDirectory": "/Users/maxmelander"
