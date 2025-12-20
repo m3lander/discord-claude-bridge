@@ -15,6 +15,7 @@ export interface QueryOptions {
   cwd: string;
   sessionId?: string;
   agentConfig: AgentConfig;
+  modelOverride?: string;
   abortController?: AbortController;
 }
 
@@ -35,13 +36,14 @@ export async function* executeQuery(options: QueryOptions): AsyncGenerator<SDKMe
     cwd,
     sessionId,
     agentConfig,
+    modelOverride,
     abortController = new AbortController(),
   } = options;
 
   // Build SDK options
   const sdkOptions: Options = {
     cwd,
-    model: agentConfig.model,
+    model: modelOverride || agentConfig.model,
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
 

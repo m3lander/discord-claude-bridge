@@ -7,13 +7,15 @@
 import 'dotenv/config';
 import { Events } from 'discord.js';
 import { createDiscordClient } from './discord/message-handler.js';
+import { createInteractionHandler } from './discord/interaction-handler.js';
 import { getChannelRouter } from './core/channel-router.js';
 import { getAgentRegistry } from './core/agent-registry.js';
 import { getSessionManager } from './core/session-manager.js';
+import { registerCommands } from './commands/index.js';
 
 // Validate environment
 function validateEnvironment(): void {
-  const required = ['DISCORD_BOT_TOKEN', 'ANTHROPIC_API_KEY'];
+  const required = ['DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'ANTHROPIC_API_KEY'];
   const missing = required.filter(key => !process.env[key]);
 
   if (missing.length > 0) {
@@ -69,6 +71,15 @@ async function main(): Promise<void> {
     autoCreateThreads: true,
     threadArchiveDuration: 1440, // 24 hours
   });
+
+  // Create interaction handler for slash commands
+  createInteractionHandler(client);
+
+  // Register slash commands
+  const clientId = process.env.DISCORD_CLIENT_ID!;
+  const token = process.env.DISCORD_BOT_TOKEN!;
+  await registerCommands(clientId, token);
+  console.log('✓ Slash commands registered');
 
   // Setup event handlers
   client.once(Events.ClientReady, (readyClient) => {

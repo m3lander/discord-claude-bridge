@@ -18,6 +18,7 @@ export interface Session {
   channelId: string;
   directory: string;
   agentAlias: string;
+  modelOverride: string | null;
   createdAt: Date;
   lastActiveAt: Date;
   messageCount: number;
@@ -40,6 +41,7 @@ export class SessionManager {
         channel_id TEXT NOT NULL,
         directory TEXT NOT NULL,
         agent_alias TEXT NOT NULL DEFAULT 'claude',
+        model_override TEXT DEFAULT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
         message_count INTEGER NOT NULL DEFAULT 0
@@ -48,6 +50,14 @@ export class SessionManager {
       CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active_at);
     `);
+
+    // Migration: Add model_override column if missing (for existing databases)
+    const columns = this.db.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
+    const hasModelOverride = columns.some(col => col.name === 'model_override');
+    if (!hasModelOverride) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN model_override TEXT DEFAULT NULL');
+      console.log('  Migrated sessions table: added model_override column');
+    }
   }
 
   /**
@@ -61,12 +71,13 @@ export class SessionManager {
         channel_id as channelId,
         directory,
         agent_alias as agentAlias,
+        model_override as modelOverride,
         created_at as createdAt,
         last_active_at as lastActiveAt,
         message_count as messageCount
       FROM sessions
       WHERE thread_id = ?
-    `).get(threadId) as Session | undefined;
+    `).get(threadId) as (Omit<Session, 'createdAt' | 'lastActiveAt'> & { createdAt: string; lastActiveAt: string }) | undefined;
 
     if (!row) return null;
 
@@ -90,8 +101,8 @@ export class SessionManager {
     const now = new Date().toISOString();
 
     this.db.prepare(`
-      INSERT INTO sessions (thread_id, session_id, channel_id, directory, agent_alias, created_at, last_active_at, message_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      INSERT INTO sessions (thread_id, session_id, channel_id, directory, agent_alias, model_override, created_at, last_active_at, message_count)
+      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 0)
     `).run(
       params.threadId,
       params.sessionId,
@@ -104,6 +115,7 @@ export class SessionManager {
 
     return {
       ...params,
+      modelOverride: null,
       createdAt: new Date(now),
       lastActiveAt: new Date(now),
       messageCount: 0,
@@ -135,6 +147,15 @@ export class SessionManager {
   }
 
   /**
+   * Update the model override for a session (for /model command)
+   */
+  updateSessionModel(threadId: string, model: string | null): void {
+    this.db.prepare(`
+      UPDATE sessions SET model_override = ? WHERE thread_id = ?
+    `).run(model, threadId);
+  }
+
+  /**
    * Get all sessions for a channel
    */
   getChannelSessions(channelId: string): Session[] {
@@ -145,13 +166,14 @@ export class SessionManager {
         channel_id as channelId,
         directory,
         agent_alias as agentAlias,
+        model_override as modelOverride,
         created_at as createdAt,
         last_active_at as lastActiveAt,
         message_count as messageCount
       FROM sessions
       WHERE channel_id = ?
       ORDER BY last_active_at DESC
-    `).all(channelId) as Session[];
+    `).all(channelId) as (Omit<Session, 'createdAt' | 'lastActiveAt'> & { createdAt: string; lastActiveAt: string })[];
 
     return rows.map(row => ({
       ...row,
@@ -171,13 +193,14 @@ export class SessionManager {
         channel_id as channelId,
         directory,
         agent_alias as agentAlias,
+        model_override as modelOverride,
         created_at as createdAt,
         last_active_at as lastActiveAt,
         message_count as messageCount
       FROM sessions
       ORDER BY last_active_at DESC
       LIMIT ?
-    `).all(limit) as Session[];
+    `).all(limit) as (Omit<Session, 'createdAt' | 'lastActiveAt'> & { createdAt: string; lastActiveAt: string })[];
 
     return rows.map(row => ({
       ...row,

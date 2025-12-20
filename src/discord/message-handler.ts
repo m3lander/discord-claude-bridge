@@ -213,6 +213,7 @@ export class MessageHandler {
         cwd: directory,
         sessionId: resumeSessionId,
         agentConfig: parsed.agentConfig,
+        modelOverride: session.modelOverride ?? undefined,
       });
 
       // Render the stream to Discord
